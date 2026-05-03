@@ -1,7 +1,6 @@
 import os
 import requests
 from flask import Flask, request, jsonify
-from supabase import create_client
 
 app = Flask(__name__)
 
@@ -9,16 +8,23 @@ LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
 
 def get_lastfm_username(roblox_user_id):
     try:
-        result = supabase.table("linked_accounts").select("lastfm_username").eq("roblox_user_id", str(roblox_user_id)).single().execute()
-        return result.data["lastfm_username"] if result.data else None
+        url = f"{SUPABASE_URL}/rest/v1/linked_accounts?roblox_user_id=eq.{roblox_user_id}&select=lastfm_username"
+        response = requests.get(url, headers=supabase_headers())
+        data = response.json()
+        if data and len(data) > 0:
+            return data[0]["lastfm_username"]
+        return None
     except:
         return None
-
 
 @app.route("/link", methods=["POST"])
 def link_account():
@@ -32,15 +38,17 @@ def link_account():
         return jsonify({"error": "Username vide"}), 400
 
     try:
-        supabase.table("linked_accounts").upsert({
+        url = f"{SUPABASE_URL}/rest/v1/linked_accounts"
+        headers = supabase_headers()
+        headers["Prefer"] = "resolution=merge-duplicates"
+        response = requests.post(url, headers=headers, json={
             "roblox_user_id": user_id,
             "lastfm_username": username
-        }).execute()
+        })
         return jsonify({"success": True})
     except Exception as e:
         print(f"Erreur Supabase link: {e}")
-        return jsonify({"success": False, "error": "Erreur base de données"}), 500
-
+        return jsonify({"success": False}), 500
 
 @app.route("/now-playing/<roblox_user_id>", methods=["GET"])
 def now_playing(roblox_user_id):
@@ -57,7 +65,6 @@ def now_playing(roblox_user_id):
             "limit": 1
         })
         data = response.json()
-
         tracks = data.get("recenttracks", {}).get("track", [])
         if not tracks:
             return jsonify({"playing": False})
@@ -78,19 +85,16 @@ def now_playing(roblox_user_id):
         })
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
-        return jsonify({"playing": False, "error": "Erreur serveur"}), 500
-
+        return jsonify({"playing": False}), 500
 
 @app.route("/is-linked/<roblox_user_id>", methods=["GET"])
 def is_linked(roblox_user_id):
     username = get_lastfm_username(roblox_user_id)
     return jsonify({"linked": username is not None})
 
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
