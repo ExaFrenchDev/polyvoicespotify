@@ -1,48 +1,50 @@
-from flask import Flask, request, jsonify
-import requests
 import os
+import requests
+from flask import Flask, request, jsonify
+from supabase import create_client
+
 app = Flask(__name__)
 
-# ============================================================
-#  CONFIGURATION — Remplace par ta vraie clé API Last.fm
-# ============================================================
-LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")  # https://www.last.fm/api/account/create
-# ============================================================
+LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Stockage en mémoire : { roblox_user_id: lastfm_username }
-user_links = {}
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# -----------------------------------------------------------
-# POST /link
-# Roblox envoie { robloxUserId, lastfmUsername }
-# -----------------------------------------------------------
+def get_lastfm_username(roblox_user_id):
+    try:
+        result = supabase.table("linked_accounts").select("lastfm_username").eq("roblox_user_id", str(roblox_user_id)).single().execute()
+        return result.data["lastfm_username"] if result.data else None
+    except:
+        return None
+
+
 @app.route("/link", methods=["POST"])
 def link_account():
     data = request.get_json()
-
     if not data or "robloxUserId" not in data or "lastfmUsername" not in data:
         return jsonify({"error": "robloxUserId et lastfmUsername requis"}), 400
 
     user_id = str(data["robloxUserId"])
     username = data["lastfmUsername"].strip()
-
     if not username:
         return jsonify({"error": "Username vide"}), 400
 
-    user_links[user_id] = username
-    print(f"Lien créé : Roblox {user_id} → Last.fm {username}")
-    return jsonify({"success": True})
+    try:
+        supabase.table("linked_accounts").upsert({
+            "roblox_user_id": user_id,
+            "lastfm_username": username
+        }).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Erreur Supabase link: {e}")
+        return jsonify({"success": False, "error": "Erreur base de données"}), 500
 
 
-# -----------------------------------------------------------
-# GET /now-playing/<roblox_user_id>
-# Roblox appelle cette route pour savoir ce que le joueur écoute
-# -----------------------------------------------------------
 @app.route("/now-playing/<roblox_user_id>", methods=["GET"])
 def now_playing(roblox_user_id):
-    lastfm_username = user_links.get(str(roblox_user_id))
-
+    lastfm_username = get_lastfm_username(roblox_user_id)
     if not lastfm_username:
         return jsonify({"playing": False, "reason": "Compte Last.fm non lié"})
 
@@ -61,12 +63,9 @@ def now_playing(roblox_user_id):
             return jsonify({"playing": False})
 
         track = tracks[0] if isinstance(tracks, list) else tracks
-        is_now_playing = track.get("@attr", {}).get("nowplaying") == "true"
-
-        if not is_now_playing:
+        if track.get("@attr", {}).get("nowplaying") != "true":
             return jsonify({"playing": False})
 
-        # Récupération de la pochette (taille "large" = 174x174px)
         images = track.get("image", [])
         cover = next((img["#text"] for img in images if img.get("size") == "large"), "")
 
@@ -77,27 +76,22 @@ def now_playing(roblox_user_id):
             "album": track.get("album", {}).get("#text", ""),
             "cover": cover
         })
-
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
         return jsonify({"playing": False, "error": "Erreur serveur"}), 500
 
 
-# -----------------------------------------------------------
-# GET /health — Pour vérifier que le serveur tourne
-# -----------------------------------------------------------
 @app.route("/is-linked/<roblox_user_id>", methods=["GET"])
 def is_linked(roblox_user_id):
-    linked = str(roblox_user_id) in user_links
-    return jsonify({"linked": linked})
+    username = get_lastfm_username(roblox_user_id)
+    return jsonify({"linked": username is not None})
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "linkedAccounts": len(user_links)})
+    return jsonify({"status": "ok"})
 
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
