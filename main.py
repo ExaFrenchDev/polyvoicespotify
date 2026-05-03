@@ -86,6 +86,12 @@ def now_playing(roblox_user_id):
 # -----------------------------------------------------------
 # GET /health — Pour vérifier que le serveur tourne
 # -----------------------------------------------------------
+@app.route("/is-linked/<roblox_user_id>", methods=["GET"])
+def is_linked(roblox_user_id):
+    linked = str(roblox_user_id) in user_links
+    return jsonify({"linked": linked})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "linkedAccounts": len(user_links)})
