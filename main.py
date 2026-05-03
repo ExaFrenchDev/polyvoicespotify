@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask, request, jsonify, Response
 
@@ -7,6 +8,38 @@ app = Flask(__name__)
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# Cache: roblox_user_id -> { "track_id": str, "started_at": float }
+track_cache = {}
+
+# Cache durée MusicBrainz: track_id -> durée en secondes (ou None si introuvable)
+duration_cache = {}
+
+def get_track_duration(title, artist):
+    track_id = f"{title}--{artist}"
+    if track_id in duration_cache:
+        return duration_cache[track_id]
+    try:
+        resp = requests.get(
+            "https://musicbrainz.org/ws/2/recording/",
+            params={
+                "query": f'recording:"{title}" AND artist:"{artist}"',
+                "fmt": "json",
+                "limit": 1
+            },
+            headers={"User-Agent": "PolyVoiceRoblox/1.0 (contact@example.com)"},
+            timeout=4
+        )
+        data = resp.json()
+        recordings = data.get("recordings", [])
+        if recordings and recordings[0].get("length"):
+            duration = recordings[0]["length"] // 1000  # ms -> secondes
+            duration_cache[track_id] = duration
+            return duration
+    except Exception as e:
+        print(f"Erreur MusicBrainz: {e}")
+    duration_cache[track_id] = None
+    return None
 
 def supabase_headers():
     return {
@@ -64,21 +97,46 @@ def now_playing(roblox_user_id):
         data = response.json()
         tracks = data.get("recenttracks", {}).get("track", [])
         if not tracks:
+            track_cache.pop(roblox_user_id, None)
             return jsonify({"playing": False})
+
         track = tracks[0] if isinstance(tracks, list) else tracks
         if track.get("@attr", {}).get("nowplaying") != "true":
+            track_cache.pop(roblox_user_id, None)
             return jsonify({"playing": False})
+
+        title  = track.get("name", "Inconnu")
+        artist = track.get("artist", {}).get("#text", "Inconnu")
+        track_id = f"{title}--{artist}"
+
+        now = time.time()
+        cached = track_cache.get(roblox_user_id)
+        if cached and cached["track_id"] == track_id:
+            elapsed = int(now - cached["started_at"])
+        else:
+            elapsed = 0
+            track_cache[roblox_user_id] = {
+                "track_id": track_id,
+                "started_at": now
+            }
+
+        # Récupération durée via MusicBrainz (avec cache)
+        duration = get_track_duration(title, artist)
+
         images = track.get("image", [])
         cover_url = next((img["#text"] for img in images if img.get("size") == "large"), "")
         proxied_cover = ""
         if cover_url:
             proxied_cover = f"https://polyvoicespotify.onrender.com/cover-proxy?url={requests.utils.quote(cover_url, safe='')}"
+
         return jsonify({
             "playing": True,
-            "title": track.get("name", "Inconnu"),
-            "artist": track.get("artist", {}).get("#text", "Inconnu"),
+            "title": title,
+            "artist": artist,
             "album": track.get("album", {}).get("#text", ""),
-            "cover": proxied_cover
+            "cover": proxied_cover,
+            "elapsed": elapsed,
+            "duration": duration  # secondes, ou null si MusicBrainz n'a pas trouvé
         })
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
