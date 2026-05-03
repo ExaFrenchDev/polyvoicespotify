@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify
 import requests
-
+import os
 app = Flask(__name__)
 
 # ============================================================
 #  CONFIGURATION — Remplace par ta vraie clé API Last.fm
 # ============================================================
-LASTFM_API_KEY = "83517d92ff1c095cb5963d7781e1f251"  # https://www.last.fm/api/account/create
+LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")  # https://www.last.fm/api/account/create
 # ============================================================
 
 # Stockage en mémoire : { roblox_user_id: lastfm_username }
