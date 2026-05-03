@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
 
@@ -31,17 +31,15 @@ def link_account():
     data = request.get_json()
     if not data or "robloxUserId" not in data or "lastfmUsername" not in data:
         return jsonify({"error": "robloxUserId et lastfmUsername requis"}), 400
-
     user_id = str(data["robloxUserId"])
     username = data["lastfmUsername"].strip()
     if not username:
         return jsonify({"error": "Username vide"}), 400
-
     try:
         url = f"{SUPABASE_URL}/rest/v1/linked_accounts"
         headers = supabase_headers()
         headers["Prefer"] = "resolution=merge-duplicates"
-        response = requests.post(url, headers=headers, json={
+        requests.post(url, headers=headers, json={
             "roblox_user_id": user_id,
             "lastfm_username": username
         })
@@ -55,7 +53,6 @@ def now_playing(roblox_user_id):
     lastfm_username = get_lastfm_username(roblox_user_id)
     if not lastfm_username:
         return jsonify({"playing": False, "reason": "Compte Last.fm non lié"})
-
     try:
         response = requests.get("https://ws.audioscrobbler.com/2.0/", params={
             "method": "user.getrecenttracks",
@@ -68,24 +65,42 @@ def now_playing(roblox_user_id):
         tracks = data.get("recenttracks", {}).get("track", [])
         if not tracks:
             return jsonify({"playing": False})
-
         track = tracks[0] if isinstance(tracks, list) else tracks
         if track.get("@attr", {}).get("nowplaying") != "true":
             return jsonify({"playing": False})
-
         images = track.get("image", [])
-        cover = next((img["#text"] for img in images if img.get("size") == "large"), "")
-
+        cover_url = next((img["#text"] for img in images if img.get("size") == "large"), "")
+        proxied_cover = ""
+        if cover_url:
+            proxied_cover = f"https://polyvoicespotify.onrender.com/cover-proxy?url={requests.utils.quote(cover_url, safe='')}"
         return jsonify({
             "playing": True,
             "title": track.get("name", "Inconnu"),
             "artist": track.get("artist", {}).get("#text", "Inconnu"),
             "album": track.get("album", {}).get("#text", ""),
-            "cover": cover
+            "cover": proxied_cover
         })
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
         return jsonify({"playing": False}), 500
+
+@app.route("/cover-proxy", methods=["GET"])
+def cover_proxy():
+    url = request.args.get("url", "")
+    if not url or not url.startswith("https://"):
+        return jsonify({"error": "URL invalide"}), 400
+    allowed_domains = ["lastfm.freetls.fastly.net", "lastfm-img2.akamaized.net"]
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc
+    if domain not in allowed_domains:
+        return jsonify({"error": "Domaine non autorisé"}), 403
+    try:
+        resp = requests.get(url, timeout=5)
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        return Response(resp.content, content_type=content_type)
+    except Exception as e:
+        print(f"Erreur cover proxy: {e}")
+        return jsonify({"error": "Fetch échoué"}), 500
 
 @app.route("/is-linked/<roblox_user_id>", methods=["GET"])
 def is_linked(roblox_user_id):
