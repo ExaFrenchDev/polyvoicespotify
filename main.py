@@ -1,7 +1,10 @@
 import os
 import time
+import io
 import requests
+from PIL import Image
 from flask import Flask, request, jsonify, Response
+from urllib.parse import urlparse, quote
 
 app = Flask(__name__)
 
@@ -9,10 +12,7 @@ LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Cache: roblox_user_id -> { "track_id": str, "started_at": float }
 track_cache = {}
-
-# Cache durée MusicBrainz: track_id -> durée en secondes (ou None si introuvable)
 duration_cache = {}
 
 def get_track_duration(title, artist):
@@ -22,18 +22,14 @@ def get_track_duration(title, artist):
     try:
         resp = requests.get(
             "https://musicbrainz.org/ws/2/recording/",
-            params={
-                "query": f'recording:"{title}" AND artist:"{artist}"',
-                "fmt": "json",
-                "limit": 1
-            },
+            params={"query": f'recording:"{title}" AND artist:"{artist}"', "fmt": "json", "limit": 1},
             headers={"User-Agent": "PolyVoiceRoblox/1.0 (contact@example.com)"},
             timeout=4
         )
         data = resp.json()
         recordings = data.get("recordings", [])
         if recordings and recordings[0].get("length"):
-            duration = recordings[0]["length"] // 1000  # ms -> secondes
+            duration = recordings[0]["length"] // 1000
             duration_cache[track_id] = duration
             return duration
     except Exception as e:
@@ -72,10 +68,7 @@ def link_account():
         url = f"{SUPABASE_URL}/rest/v1/linked_accounts"
         headers = supabase_headers()
         headers["Prefer"] = "resolution=merge-duplicates"
-        requests.post(url, headers=headers, json={
-            "roblox_user_id": user_id,
-            "lastfm_username": username
-        })
+        requests.post(url, headers=headers, json={"roblox_user_id": user_id, "lastfm_username": username})
         return jsonify({"success": True})
     except Exception as e:
         print(f"Erreur Supabase link: {e}")
@@ -105,7 +98,7 @@ def now_playing(roblox_user_id):
             track_cache.pop(roblox_user_id, None)
             return jsonify({"playing": False})
 
-        title  = track.get("name", "Inconnu")
+        title = track.get("name", "Inconnu")
         artist = track.get("artist", {}).get("#text", "Inconnu")
         track_id = f"{title}--{artist}"
 
@@ -115,19 +108,15 @@ def now_playing(roblox_user_id):
             elapsed = int(now - cached["started_at"])
         else:
             elapsed = 0
-            track_cache[roblox_user_id] = {
-                "track_id": track_id,
-                "started_at": now
-            }
+            track_cache[roblox_user_id] = {"track_id": track_id, "started_at": now}
 
-        # Récupération durée via MusicBrainz (avec cache)
         duration = get_track_duration(title, artist)
 
         images = track.get("image", [])
         cover_url = next((img["#text"] for img in images if img.get("size") == "large"), "")
         proxied_cover = ""
         if cover_url:
-            proxied_cover = f"https://polyvoicespotify.onrender.com/cover-proxy?url={requests.utils.quote(cover_url, safe='')}"
+            proxied_cover = f"https://polyvoicespotify.onrender.com/cover-proxy?url={quote(cover_url, safe='')}"
 
         return jsonify({
             "playing": True,
@@ -136,7 +125,7 @@ def now_playing(roblox_user_id):
             "album": track.get("album", {}).get("#text", ""),
             "cover": proxied_cover,
             "elapsed": elapsed,
-            "duration": duration  # secondes, ou null si MusicBrainz n'a pas trouvé
+            "duration": duration
         })
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
@@ -148,17 +137,16 @@ def cover_proxy():
     if not url or not url.startswith("https://"):
         return jsonify({"error": "URL invalide"}), 400
     allowed_domains = ["lastfm.freetls.fastly.net", "lastfm-img2.akamaized.net"]
-    from urllib.parse import urlparse
     domain = urlparse(url).netloc
     if domain not in allowed_domains:
         return jsonify({"error": "Domaine non autorisé"}), 403
     try:
         resp = requests.get(url, timeout=5)
-        content_type = resp.headers.get("Content-Type", "image/jpeg")
-        return Response(resp.content, content_type=content_type)
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
+        raw = img.tobytes()
+        return Response(raw, content_type="application/octet-stream")
     except Exception as e:
-        print(f"Erreur cover proxy: {e}")
-        return jsonify({"error": "Fetch échoué"}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/is-linked/<roblox_user_id>", methods=["GET"])
 def is_linked(roblox_user_id):
