@@ -110,7 +110,7 @@ def upload_cover_to_roblox(image_url):
         out.seek(0)
 
         creation_context = json.dumps({
-            "assetType": "Decal",
+            "assetType": "Image",
             "displayName": "cover",
             "description": "",
             "creationContext": {
