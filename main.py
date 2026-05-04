@@ -48,16 +48,30 @@ def get_track_duration(title, artist):
     duration_cache[track_id] = None
     return None
 
+def get_image_asset_id(decal_asset_id):
+    try:
+        res = requests.get(
+            f"https://apis.roblox.com/assets/v1/assets/{decal_asset_id}",
+            headers={"x-api-key": ROBLOX_API_KEY},
+            timeout=10
+        )
+        data = res.json()
+        print(f"Asset details: {data}")
+        return data.get("imageAssetId") or decal_asset_id
+    except Exception as e:
+        print(f"Erreur get asset details: {e}")
+        return decal_asset_id
+
 def set_asset_public(asset_id_str):
-    asset_id = asset_id_str.replace("rbxassetid://", "")
+    asset_id = str(asset_id_str).replace("rbxassetid://", "")
     try:
         res = requests.patch(
             f"https://apis.roblox.com/assets/v1/assets/{asset_id}/permissions",
             headers={"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"},
-            json={"requests": [{"action": "UseView", "subjectType": "Universe", "subjectId": "0"}]},
+            json={"requests": [{"action": "UseView", "subjectType": "Public"}]},
             timeout=10
         )
-        print(f"Permissions asset {asset_id}: {res.status_code}")
+        print(f"Permissions asset {asset_id}: {res.status_code} | {res.text}")
     except Exception as e:
         print(f"Erreur permissions: {e}")
 
@@ -144,7 +158,8 @@ def upload_cover_to_roblox(image_url):
                         print(f"Cache sauvegardé: {rbx_id}")
                     except Exception as e:
                         print(f"Erreur cache save: {e}")
-                    set_asset_public(rbx_id)
+                    real_image_id = get_image_asset_id(asset_id)
+                    set_asset_public(str(real_image_id))
                     return rbx_id
                 break
 
