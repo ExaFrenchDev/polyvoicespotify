@@ -34,7 +34,8 @@ def get_track_duration(title, artist):
             "https://musicbrainz.org/ws/2/recording/",
             params={"query": f'recording:"{title}" AND artist:"{artist}"', "fmt": "json", "limit": 1},
             headers={"User-Agent": "PolyVoiceRoblox/1.0 (contact@example.com)"},
-            timeout=4
+            timeout=4,
+            verify=False
         )
         data = resp.json()
         recordings = data.get("recordings", [])
@@ -61,6 +62,9 @@ def set_asset_public(asset_id_str):
         print(f"Erreur permissions: {e}")
 
 def upload_cover_to_roblox(image_url):
+    if not image_url or image_url.strip() == "":
+        return ""
+
     try:
         resp = requests.get(
             f"{SUPABASE_URL}/rest/v1/cover_cache?image_url=eq.{quote(image_url, safe='')}&select=asset_id",
@@ -76,7 +80,17 @@ def upload_cover_to_roblox(image_url):
 
     try:
         resp = requests.get(image_url, timeout=5)
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
+        content_type = resp.headers.get("Content-Type", "")
+        if resp.status_code != 200 or "image" not in content_type:
+            print(f"Image invalide ({resp.status_code}, {content_type}): {image_url}")
+            return ""
+
+        raw = resp.content
+        if len(raw) < 100:
+            print(f"Image trop petite, probablement invalide: {image_url}")
+            return ""
+
+        img = Image.open(io.BytesIO(raw)).convert("RGBA").resize((174, 174))
         out = io.BytesIO()
         img.save(out, format="PNG")
         out.seek(0)
