@@ -52,9 +52,7 @@ def upload_cover_to_roblox(image_url):
 
         response = requests.post(
             "https://apis.roblox.com/assets/v1/assets",
-            headers={
-                "x-api-key": ROBLOX_API_KEY,
-            },
+            headers={"x-api-key": ROBLOX_API_KEY},
             files={
                 "request": (None, '{"assetType":"Decal","displayName":"cover","description":"","creationContext":{"creator":{"userId":"' + ROBLOX_USER_ID + '"}}}', "application/json"),
                 "fileContent": ("cover.png", out, "image/png"),
@@ -62,12 +60,28 @@ def upload_cover_to_roblox(image_url):
             timeout=15
         )
         data = response.json()
-        print("Roblox upload response:", data)
-        asset_id = data.get("assetId") or (data.get("response", {}).get("assetId"))
-        if asset_id:
-            rbx_id = f"rbxassetid://{asset_id}"
-            cover_cache[image_url] = rbx_id
-            return rbx_id
+        operation_id = data.get("operationId")
+        if not operation_id:
+            print("Pas d'operationId:", data)
+            return ""
+
+        for _ in range(10):
+            time.sleep(2)
+            poll = requests.get(
+                f"https://apis.roblox.com/assets/v1/operations/{operation_id}",
+                headers={"x-api-key": ROBLOX_API_KEY},
+                timeout=10
+            )
+            poll_data = poll.json()
+            print("Poll response:", poll_data)
+            if poll_data.get("done"):
+                asset_id = poll_data.get("response", {}).get("assetId")
+                if asset_id:
+                    rbx_id = f"rbxassetid://{asset_id}"
+                    cover_cache[image_url] = rbx_id
+                    return rbx_id
+                break
+
     except Exception as e:
         print(f"Erreur upload Roblox: {e}")
     return ""
