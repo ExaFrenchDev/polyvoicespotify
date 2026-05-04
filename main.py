@@ -1,6 +1,7 @@
 import os
 import time
 import io
+import json
 import requests
 from PIL import Image
 from flask import Flask, request, jsonify, Response
@@ -12,11 +13,17 @@ LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 ROBLOX_API_KEY = os.environ.get("ROBLOX_API_KEY")
-ROBLOX_USER_ID = os.environ.get("ROBLOX_USER_ID")
+ROBLOX_GROUP_ID = os.environ.get("ROBLOX_GROUP_ID")
 
 track_cache = {}
 duration_cache = {}
-cover_cache = {}
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
 
 def get_track_duration(title, artist):
     track_id = f"{title}--{artist}"
@@ -41,8 +48,21 @@ def get_track_duration(title, artist):
     return None
 
 def upload_cover_to_roblox(image_url):
-    if image_url in cover_cache:
-        return cover_cache[image_url]
+    # 1. Vérifie le cache Supabase
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/cover_cache?image_url=eq.{quote(image_url, safe='')}&select=asset_id",
+            headers=supabase_headers(),
+            timeout=5
+        )
+        data = resp.json()
+        if data and len(data) > 0:
+            print(f"Cache hit: {data[0]['asset_id']}")
+            return data[0]["asset_id"]
+    except Exception as e:
+        print(f"Erreur cache lookup: {e}")
+
+    # 2. Télécharge et redimensionne l'image
     try:
         resp = requests.get(image_url, timeout=5)
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
@@ -50,21 +70,34 @@ def upload_cover_to_roblox(image_url):
         img.save(out, format="PNG")
         out.seek(0)
 
+        creation_context = json.dumps({
+            "assetType": "Decal",
+            "displayName": "cover",
+            "description": "",
+            "creationContext": {
+                "creator": {"groupId": ROBLOX_GROUP_ID}
+            }
+        })
+
+        # 3. Upload vers Roblox Open Cloud
         response = requests.post(
             "https://apis.roblox.com/assets/v1/assets",
             headers={"x-api-key": ROBLOX_API_KEY},
             files={
-                "request": (None, '{"assetType":"Decal","displayName":"cover","description":"","creationContext":{"creator":{"userId":"' + ROBLOX_USER_ID + '"}}}', "application/json"),
+                "request": (None, creation_context, "application/json"),
                 "fileContent": ("cover.png", out, "image/png"),
             },
             timeout=15
         )
         data = response.json()
+        print("Upload response:", data)
+
         operation_id = data.get("operationId")
         if not operation_id:
             print("Pas d'operationId:", data)
             return ""
 
+        # 4. Poll jusqu'à ce que ce soit prêt
         for _ in range(10):
             time.sleep(2)
             poll = requests.get(
@@ -73,25 +106,28 @@ def upload_cover_to_roblox(image_url):
                 timeout=10
             )
             poll_data = poll.json()
-            print("Poll response:", poll_data)
+            print("Poll:", poll_data)
             if poll_data.get("done"):
                 asset_id = poll_data.get("response", {}).get("assetId")
                 if asset_id:
                     rbx_id = f"rbxassetid://{asset_id}"
-                    cover_cache[image_url] = rbx_id
+                    # 5. Sauvegarde dans Supabase
+                    try:
+                        requests.post(
+                            f"{SUPABASE_URL}/rest/v1/cover_cache",
+                            headers={**supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                            json={"image_url": image_url, "asset_id": rbx_id},
+                            timeout=5
+                        )
+                        print(f"Cache sauvegardé: {rbx_id}")
+                    except Exception as e:
+                        print(f"Erreur cache save: {e}")
                     return rbx_id
                 break
 
     except Exception as e:
         print(f"Erreur upload Roblox: {e}")
     return ""
-
-def supabase_headers():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
 
 def get_lastfm_username(roblox_user_id):
     try:
