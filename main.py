@@ -4,8 +4,8 @@ import io
 import json
 import requests
 from PIL import Image
-from flask import Flask, request, jsonify, Response
-from urllib.parse import urlparse, quote
+from flask import Flask, request, jsonify
+from urllib.parse import quote
 
 app = Flask(__name__)
 
@@ -47,8 +47,20 @@ def get_track_duration(title, artist):
     duration_cache[track_id] = None
     return None
 
+def set_asset_public(asset_id_str):
+    asset_id = asset_id_str.replace("rbxassetid://", "")
+    try:
+        res = requests.patch(
+            f"https://apis.roblox.com/assets/v1/assets/{asset_id}/permissions",
+            headers={"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"},
+            json={"requests": [{"action": "UseView", "subjectType": "Universe", "subjectId": "0"}]},
+            timeout=10
+        )
+        print(f"Permissions asset {asset_id}: {res.status_code}")
+    except Exception as e:
+        print(f"Erreur permissions: {e}")
+
 def upload_cover_to_roblox(image_url):
-    # 1. Vérifie le cache Supabase
     try:
         resp = requests.get(
             f"{SUPABASE_URL}/rest/v1/cover_cache?image_url=eq.{quote(image_url, safe='')}&select=asset_id",
@@ -62,7 +74,6 @@ def upload_cover_to_roblox(image_url):
     except Exception as e:
         print(f"Erreur cache lookup: {e}")
 
-    # 2. Télécharge et redimensionne l'image
     try:
         resp = requests.get(image_url, timeout=5)
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
@@ -79,7 +90,6 @@ def upload_cover_to_roblox(image_url):
             }
         })
 
-        # 3. Upload vers Roblox Open Cloud
         response = requests.post(
             "https://apis.roblox.com/assets/v1/assets",
             headers={"x-api-key": ROBLOX_API_KEY},
@@ -97,7 +107,6 @@ def upload_cover_to_roblox(image_url):
             print("Pas d'operationId:", data)
             return ""
 
-        # 4. Poll jusqu'à ce que ce soit prêt
         for _ in range(10):
             time.sleep(2)
             poll = requests.get(
@@ -111,7 +120,6 @@ def upload_cover_to_roblox(image_url):
                 asset_id = poll_data.get("response", {}).get("assetId")
                 if asset_id:
                     rbx_id = f"rbxassetid://{asset_id}"
-                    # 5. Sauvegarde dans Supabase
                     try:
                         requests.post(
                             f"{SUPABASE_URL}/rest/v1/cover_cache",
@@ -122,6 +130,7 @@ def upload_cover_to_roblox(image_url):
                         print(f"Cache sauvegardé: {rbx_id}")
                     except Exception as e:
                         print(f"Erreur cache save: {e}")
+                    set_asset_public(rbx_id)
                     return rbx_id
                 break
 
