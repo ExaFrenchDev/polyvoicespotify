@@ -11,9 +11,12 @@ app = Flask(__name__)
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+ROBLOX_API_KEY = os.environ.get("ROBLOX_API_KEY")
+ROBLOX_USER_ID = os.environ.get("ROBLOX_USER_ID")
 
 track_cache = {}
 duration_cache = {}
+cover_cache = {}
 
 def get_track_duration(title, artist):
     track_id = f"{title}--{artist}"
@@ -36,6 +39,38 @@ def get_track_duration(title, artist):
         print(f"Erreur MusicBrainz: {e}")
     duration_cache[track_id] = None
     return None
+
+def upload_cover_to_roblox(image_url):
+    if image_url in cover_cache:
+        return cover_cache[image_url]
+    try:
+        resp = requests.get(image_url, timeout=5)
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        out.seek(0)
+
+        response = requests.post(
+            "https://apis.roblox.com/assets/v1/assets",
+            headers={
+                "x-api-key": ROBLOX_API_KEY,
+            },
+            files={
+                "request": (None, '{"assetType":"Decal","displayName":"cover","description":"","creationContext":{"creator":{"userId":"' + ROBLOX_USER_ID + '"}}}', "application/json"),
+                "fileContent": ("cover.png", out, "image/png"),
+            },
+            timeout=15
+        )
+        data = response.json()
+        print("Roblox upload response:", data)
+        asset_id = data.get("assetId") or (data.get("response", {}).get("assetId"))
+        if asset_id:
+            rbx_id = f"rbxassetid://{asset_id}"
+            cover_cache[image_url] = rbx_id
+            return rbx_id
+    except Exception as e:
+        print(f"Erreur upload Roblox: {e}")
+    return ""
 
 def supabase_headers():
     return {
@@ -114,39 +149,22 @@ def now_playing(roblox_user_id):
 
         images = track.get("image", [])
         cover_url = next((img["#text"] for img in images if img.get("size") == "large"), "")
-        proxied_cover = ""
+        rbx_cover = ""
         if cover_url:
-            proxied_cover = f"https://polyvoicespotify.onrender.com/cover-proxy?url={quote(cover_url, safe='')}"
+            rbx_cover = upload_cover_to_roblox(cover_url)
 
         return jsonify({
             "playing": True,
             "title": title,
             "artist": artist,
             "album": track.get("album", {}).get("#text", ""),
-            "cover": proxied_cover,
+            "cover": rbx_cover,
             "elapsed": elapsed,
             "duration": duration
         })
     except Exception as e:
         print(f"Erreur Last.fm: {e}")
         return jsonify({"playing": False}), 500
-
-@app.route("/cover-proxy", methods=["GET"])
-def cover_proxy():
-    url = request.args.get("url", "")
-    if not url or not url.startswith("https://"):
-        return jsonify({"error": "URL invalide"}), 400
-    allowed_domains = ["lastfm.freetls.fastly.net", "lastfm-img2.akamaized.net"]
-    domain = urlparse(url).netloc
-    if domain not in allowed_domains:
-        return jsonify({"error": "Domaine non autorisé"}), 403
-    try:
-        resp = requests.get(url, timeout=5)
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
-        raw = img.tobytes()
-        return Response(raw, content_type="application/octet-stream")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/is-linked/<roblox_user_id>", methods=["GET"])
 def is_linked(roblox_user_id):
