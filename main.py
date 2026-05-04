@@ -66,7 +66,7 @@ def set_asset_public(asset_id_str):
     asset_id = str(asset_id_str).replace("rbxassetid://", "")
     try:
         res = requests.patch(
-            f"https://apis.roblox.com/assets/v1/assets/{asset_id}/permissions",
+            f"https://apis.roblox.com/asset-permissions/v1/assets/{asset_id}/permissions",
             headers={"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"},
             json={"requests": [{"action": "UseView", "subjectType": "Public"}]},
             timeout=10
