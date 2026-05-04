@@ -1,19 +1,13 @@
 import os
 import time
-import io
-import json
 import requests
-from PIL import Image
 from flask import Flask, request, jsonify
-from urllib.parse import quote
 
 app = Flask(__name__)
 
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-ROBLOX_API_KEY = os.environ.get("ROBLOX_API_KEY")
-ROBLOX_GROUP_ID = os.environ.get("ROBLOX_GROUP_ID")
 
 track_cache = {}
 duration_cache = {}
@@ -47,125 +41,6 @@ def get_track_duration(title, artist):
         print(f"Erreur MusicBrainz: {e}")
     duration_cache[track_id] = None
     return None
-
-def get_image_asset_id(decal_asset_id):
-    try:
-        res = requests.get(
-            f"https://apis.roblox.com/assets/v1/assets/{decal_asset_id}",
-            headers={"x-api-key": ROBLOX_API_KEY},
-            timeout=10
-        )
-        data = res.json()
-        print(f"Asset details: {data}")
-        return data.get("imageAssetId") or decal_asset_id
-    except Exception as e:
-        print(f"Erreur get asset details: {e}")
-        return decal_asset_id
-
-def set_asset_public(asset_id_str):
-    asset_id = str(asset_id_str).replace("rbxassetid://", "")
-    try:
-        res = requests.patch(
-            f"https://apis.roblox.com/asset-permissions/v1/assets/{asset_id}/permissions",
-            headers={"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"},
-            json={"requests": [{"action": "UseView", "subjectType": "Public"}]},
-            timeout=10
-        )
-        print(f"Permissions asset {asset_id}: {res.status_code} | {res.text}")
-    except Exception as e:
-        print(f"Erreur permissions: {e}")
-
-def upload_cover_to_roblox(image_url):
-    if not image_url or image_url.strip() == "":
-        return ""
-
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/cover_cache?image_url=eq.{quote(image_url, safe='')}&select=asset_id",
-            headers=supabase_headers(),
-            timeout=5
-        )
-        data = resp.json()
-        if data and len(data) > 0:
-            print(f"Cache hit: {data[0]['asset_id']}")
-            return data[0]["asset_id"]
-    except Exception as e:
-        print(f"Erreur cache lookup: {e}")
-
-    try:
-        resp = requests.get(image_url, timeout=5)
-        content_type = resp.headers.get("Content-Type", "")
-        if resp.status_code != 200 or "image" not in content_type:
-            print(f"Image invalide ({resp.status_code}, {content_type}): {image_url}")
-            return ""
-
-        raw = resp.content
-        if len(raw) < 100:
-            print(f"Image trop petite, probablement invalide: {image_url}")
-            return ""
-
-        img = Image.open(io.BytesIO(raw)).convert("RGBA").resize((174, 174))
-        out = io.BytesIO()
-        img.save(out, format="PNG")
-        out.seek(0)
-
-        creation_context = json.dumps({
-            "assetType": "Image",
-            "displayName": "cover",
-            "description": "",
-            "creationContext": {
-                "creator": {"groupId": ROBLOX_GROUP_ID}
-            }
-        })
-
-        response = requests.post(
-            "https://apis.roblox.com/assets/v1/assets",
-            headers={"x-api-key": ROBLOX_API_KEY},
-            files={
-                "request": (None, creation_context, "application/json"),
-                "fileContent": ("cover.png", out, "image/png"),
-            },
-            timeout=15
-        )
-        data = response.json()
-        print("Upload response:", data)
-
-        operation_id = data.get("operationId")
-        if not operation_id:
-            print("Pas d'operationId:", data)
-            return ""
-
-        for _ in range(10):
-            time.sleep(2)
-            poll = requests.get(
-                f"https://apis.roblox.com/assets/v1/operations/{operation_id}",
-                headers={"x-api-key": ROBLOX_API_KEY},
-                timeout=10
-            )
-            poll_data = poll.json()
-            print("Poll:", poll_data)
-            if poll_data.get("done"):
-                asset_id = poll_data.get("response", {}).get("assetId")
-                if asset_id:
-                    rbx_id = f"rbxassetid://{asset_id}"
-                    try:
-                        requests.post(
-                            f"{SUPABASE_URL}/rest/v1/cover_cache",
-                            headers={**supabase_headers(), "Prefer": "resolution=merge-duplicates"},
-                            json={"image_url": image_url, "asset_id": rbx_id},
-                            timeout=5
-                        )
-                        print(f"Cache sauvegardé: {rbx_id}")
-                    except Exception as e:
-                        print(f"Erreur cache save: {e}")
-                    real_image_id = get_image_asset_id(asset_id)
-                    set_asset_public(str(real_image_id))
-                    return rbx_id
-                break
-
-    except Exception as e:
-        print(f"Erreur upload Roblox: {e}")
-    return ""
 
 def get_lastfm_username(roblox_user_id):
     try:
@@ -235,18 +110,11 @@ def now_playing(roblox_user_id):
 
         duration = get_track_duration(title, artist)
 
-        images = track.get("image", [])
-        cover_url = next((img["#text"] for img in images if img.get("size") == "large"), "")
-        rbx_cover = ""
-        if cover_url:
-            rbx_cover = upload_cover_to_roblox(cover_url)
-
         return jsonify({
             "playing": True,
             "title": title,
             "artist": artist,
             "album": track.get("album", {}).get("#text", ""),
-            "cover": rbx_cover,
             "elapsed": elapsed,
             "duration": duration
         })
