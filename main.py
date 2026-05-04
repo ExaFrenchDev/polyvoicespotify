@@ -143,9 +143,8 @@ def cover_proxy():
     try:
         resp = requests.get(url, timeout=5)
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((174, 174))
-        out = io.BytesIO()
-        img.save(out, format="PNG")
-        return Response(out.getvalue(), content_type="image/png")
+        raw = img.tobytes()
+        return Response(raw, content_type="application/octet-stream")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
